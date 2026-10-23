@@ -1,0 +1,1020 @@
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -3559,6 +3559,9 @@ static_library("ui") {
+       "views/frame/vertical_tab_strip_region_view.h",
+       "views/helium/frame_corner_radius.cc",
+       "views/helium/frame_corner_radius.h",
++      "views/helium/workspace_scroll_tracker.h",
++      "views/helium/workspace_switcher_view.cc",
++      "views/helium/workspace_switcher_view.h",
+       "views/helium/native_frame_materials.cc",
+       "views/helium/native_frame_materials.h",
+     ]
+--- a/chrome/browser/ui/color/material_chrome_color_mixer.cc
++++ b/chrome/browser/ui/color/material_chrome_color_mixer.cc
+@@ -529,9 +529,8 @@ void AddMaterialChromeColorMixer(ui::Col
+   // Custom themes retain their frame colors because they skip these overrides.
+   // Keep the sidebar and toolbar on one softly tinted surface, framing the
+   // page as a separate rounded panel in both light and dark appearances.
+-  mixer[ui::kColorFrameActive] = {
+-      dark_mode ? SkColorSetRGB(0x28, 0x26, 0x2E)
+-                : SkColorSetRGB(0xEC, 0xE8, 0xE3)};
++  mixer[ui::kColorFrameActive] = {dark_mode ? SkColorSetRGB(0x11, 0x11, 0x11)
++                                            : SkColorSetRGB(0xEF, 0xED, 0xE9)};
+   mixer[ui::kColorFrameInactive] = {ui::kColorFrameActive};
+ 
+   // Toolbar colors.
+--- a/chrome/browser/ui/tabs/vertical_tab_strip_state.h
++++ b/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+@@ -7,7 +7,7 @@
+ 
+ namespace tabs {
+ 
+-inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 256;
++inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 240;
+ 
+ // Per-window state for the vertical tab strip.
+ struct VerticalTabStripState {
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -50,6 +50,7 @@
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_host.h"
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_utils.h"
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_tray_view.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/geometry/insets.h"
+@@ -890,6 +891,10 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   const BrowserLayoutParams top_container_parent_params = params;
+   const bool vertical_right_aligned =
+       delegate().IsVerticalTabStripRightAligned();
++  const auto* sidebar_toolbar_view =
++      views::AsViewClass<ToolbarView>(views().toolbar.get());
++  const bool sidebar_toolbar =
++      sidebar_toolbar_view && sidebar_toolbar_view->UsesSidebarLayout();
+ 
+   if (IsParentedTo(views().organizer_tray, views().browser_view)) {
+     const bool show_organizer_tray =
+@@ -989,10 +994,12 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+           vertical_right_aligned
+               ? params.visual_client_area.right() -
+                     zen.vertical_tab_strip_padding - vertical_tab_strip_width
+-              : params.visual_client_area.x() +
+-                    zen.vertical_tab_strip_padding;
++              : params.visual_client_area.x() + zen.vertical_tab_strip_padding;
+ 
+       int top_offset = vertical_tab_strip_animation.top_offset;
++      if (sidebar_toolbar) {
++        top_offset = views().toolbar->GetPreferredSize().height();
++      }
+       if (zen.enabled) {
+         top_offset = ScaleExtent(top_offset, zen.top_chrome_ratio);
+       }
+@@ -1082,6 +1089,10 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+             : params;
+     auto top_container_params =
+         parent_params.InLocalCoordinates(parent_params.visual_client_area);
++    if (sidebar_toolbar) {
++      top_container_params.visual_client_area.set_width(
++          horizontal_layout.vertical_tab_strip_width);
++    }
+ 
+     const gfx::Rect top_container_local_bounds = CalculateTopContainerLayout(
+         top_container_layout, top_container_params, needs_exclusion);
+@@ -1133,7 +1144,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       }
+     }
+ 
+-    params.SetTop(top_container_layout.bounds.bottom());
++    if (!sidebar_toolbar) {
++      params.SetTop(top_container_layout.bounds.bottom());
++    }
+ 
+     if (zen.enabled) {
+       AdjustTopContainerForZenMode(top_container_layout, params,
+@@ -1357,6 +1370,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   views().multi_contents_view->SetTopChromeAttachmentState(
+       infobar_visible && should_use_rounded_frame,
+       separator_info.multi_contents_separator &&
++          (!sidebar_toolbar || infobar_visible) &&
+           (infobar_visible || !zen.enabled || zen.TopChromeVisible()));
+ 
+   // Updating the top, left and right insets for contents container view when
+@@ -1622,8 +1636,15 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+                           params.visual_client_area.y(),
+                           params.visual_client_area.width(),
+                           views().toolbar->GetPreferredSize().height());
+-      toolbar_bounds =
+-          SlideBoundsFromTop(toolbar_bounds, zen.top_chrome_ratio);
++      const auto* sidebar_toolbar_view =
++          views::AsViewClass<ToolbarView>(views().toolbar.get());
++      if (sidebar_toolbar_view && sidebar_toolbar_view->UsesSidebarLayout()) {
++        toolbar_bounds = gfx::Rect(
++            params.visual_client_area.x(), params.visual_client_area.y(),
++            params.visual_client_area.width(),
++            views().toolbar->GetPreferredSize().height());
++      }
++      toolbar_bounds = SlideBoundsFromTop(toolbar_bounds, zen.top_chrome_ratio);
+       params.SetTop(toolbar_bounds.bottom());
+       needs_exclusion = false;
+     }
+@@ -1645,7 +1666,11 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+   }
+ 
+   // Lay out the bookmarks bar if one is present.
+-  const bool bookmarks_visible = delegate().IsBookmarkBarVisible();
++  const auto* sidebar_toolbar_view =
++      views::AsViewClass<ToolbarView>(views().toolbar.get());
++  const bool bookmarks_visible =
++      delegate().IsBookmarkBarVisible() &&
++      !(sidebar_toolbar_view && sidebar_toolbar_view->UsesSidebarLayout());
+   if (IsParentedTo(views().bookmark_bar, views().top_container)) {
+     const gfx::Rect bookmarks_bounds(
+         params.visual_client_area.x(), params.visual_client_area.y(),
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <optional>
+ #include <utility>
+ 
+@@ -17,6 +18,7 @@
+ #include "base/metrics/user_metrics_action.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/time/time.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/animation/browser_animation_types.h"
+@@ -34,15 +36,16 @@
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/ui_features.h"
++#include "chrome/browser/ui/view_ids.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+-#include "chrome/browser/ui/view_ids.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/frame_separator.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
++#include "chrome/browser/ui/views/helium/workspace_switcher_view.h"
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+@@ -141,6 +144,31 @@ VerticalTabStripRegionView::VerticalTabS
+   const int region_horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+ 
++  if (!browser_view->GetProfile()->IsOffTheRecord() &&
++      !browser_view->GetProfile()->IsGuestSession()) {
++    workspace_name_ =
++        content_area_view_->AddChildView(std::make_unique<views::LabelButton>(
++            base::BindRepeating(
++                [](VerticalTabStripRegionView* region) {
++                  if (region->workspace_switcher_) {
++                    region->workspace_switcher_->RenameWorkspace();
++                  }
++                },
++                base::Unretained(this)),
++            u"Space"));
++    workspace_name_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    workspace_name_->SetEnabledTextColors(kColorToolbarText);
++    workspace_name_->SetPreferredSize(gfx::Size(0, 32));
++    workspace_name_->SetTooltipText(u"Rename workspace");
++    workspace_name_->SetProperty(views::kMarginsKey, gfx::Insets::VH(4, 12));
++
++    workspace_switcher_ = AddChildView(
++        std::make_unique<WorkspaceSwitcherView>(browser_view->browser()));
++    workspace_switcher_->SetNameChangedCallback(
++        base::BindRepeating(&VerticalTabStripRegionView::OnWorkspaceNameChanged,
++                            base::Unretained(this)));
++  }
++
+   bottom_button_container_ = content_area_view_->AddChildView(
+       std::make_unique<VerticalTabStripBottomContainer>(
+           state_controller_, root_action_item, browser_view->browser(),
+@@ -414,6 +442,18 @@ views::ProposedLayout VerticalTabStripRe
+ 
+   available.Inset(interior_margin_);
+ 
++  if (workspace_switcher_) {
++    constexpr int kWorkspaceFooterHeight = 48;
++    const int footer_height =
++        std::min(kWorkspaceFooterHeight, available.height());
++    layout.child_layouts.push_back(
++        {.child_view = workspace_switcher_.get(),
++         .visible = true,
++         .bounds = gfx::Rect(available.x(), available.bottom() - footer_height,
++                             available.width(), footer_height)});
++    available.set_height(available.height() - footer_height);
++  }
++
+   // Just so that there's never a zero-size tabstrip.
+   available.set_height(std::max(1, available.height()));
+ 
+@@ -553,6 +593,34 @@ void VerticalTabStripRegionView::OnMouse
+   HandleMouseExited();
+ }
+ 
++void VerticalTabStripRegionView::OnWorkspaceNameChanged(
++    const std::u16string& name) {
++  if (workspace_name_) {
++    workspace_name_->SetText(name);
++  }
++}
++
++void VerticalTabStripRegionView::OnScrollEvent(ui::ScrollEvent* event) {
++  // Ordinary vertical scrolling continues to scroll tabs. A horizontal swipe
++  // on the sidebar changes the profile-backed workspace instead.
++  if (workspace_switcher_ && event->type() == ui::EventType::kScroll &&
++      std::abs(event->x_offset()) > std::abs(event->y_offset()) &&
++      workspace_switcher_->HandleWorkspaceScroll(event->x_offset(),
++                                                 event->time_stamp())) {
++    event->SetHandled();
++  }
++}
++
++bool VerticalTabStripRegionView::OnMouseWheel(
++    const ui::MouseWheelEvent& event) {
++  if (workspace_switcher_ &&
++      std::abs(event.x_offset()) > std::abs(event.y_offset())) {
++    return workspace_switcher_->HandleWorkspaceScroll(event.x_offset(),
++                                                      event.time_stamp());
++  }
++  return BaseTabStripRegionView::OnMouseWheel(event);
++}
++
+ void VerticalTabStripRegionView::SetOrganizerPanelView(
+     std::unique_ptr<views::View> panel_view) {
+   CHECK(!organizer_panel_view_);
+@@ -910,6 +978,9 @@ void VerticalTabStripRegionView::OnColla
+   // Apply padding immediately at the start of the animation by including
+   // the collapsing state.
+   bool collapsed = state != tabs::VerticalTabStripCollapseState::kExpanded;
++  if (workspace_name_) {
++    workspace_name_->SetVisible(!collapsed);
++  }
+ 
+   UpdateResizeAreaVisibility();
+ 
+@@ -958,6 +1029,12 @@ gfx::Rect VerticalTabStripRegionView::Ge
+       GetLayoutConstant(
+           LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding) -
+       tab_strip_draggable_bounds.y());
++  if (workspace_switcher_) {
++    tab_strip_draggable_bounds.set_height(
++        std::max(0, std::min(tab_strip_draggable_bounds.bottom(),
++                             workspace_switcher_->GetBoundsInScreen().y()) -
++                        tab_strip_draggable_bounds.y()));
++  }
+   return tab_strip_draggable_bounds;
+ }
+ 
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -39,12 +39,14 @@ class BrowserView;
+ class VerticalTabStripBottomContainer;
+ class VerticalTabStripFocusSwipeController;
+ class ShadowFrameView;
++class WorkspaceSwitcherView;
+ 
+ namespace tabs {
+ class VerticalTabStripStateController;
+ }  // namespace tabs
+ 
+ namespace views {
++class LabelButton;
+ class ResizeArea;
+ class Separator;
+ class View;
+@@ -66,7 +68,7 @@ class VerticalTabStripRegionView final
+ 
+   // TODO(crbug.com/465833741): Replace constant with derived value based on
+   // caption buttons.
+-  static constexpr int kUncollapsedMinWidth = 160;
++  static constexpr int kUncollapsedMinWidth = 224;
+   // TODO(crbug.com/465832180): Replace constant based width final max width for
+   // view.
+   static constexpr int kUncollapsedMaxWidth = 400;
+@@ -122,6 +124,8 @@ class VerticalTabStripRegionView final
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
++  void OnScrollEvent(ui::ScrollEvent* event) override;
++  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
+ 
+   std::unique_ptr<ExpandOnHoverLock> GetExpandOnHoverLock(
+       ExpandOnHoverLockType lock_type) override;
+@@ -166,6 +170,10 @@ class VerticalTabStripRegionView final
+   }
+ 
+  private:
++  void OnWorkspaceNameChanged(const std::u16string& name);
++  raw_ptr<views::LabelButton> workspace_name_ = nullptr;
++  raw_ptr<WorkspaceSwitcherView> workspace_switcher_ = nullptr;
++
+   // Since VerticalTabStripRegionView inherits from AccessiblePaneView, which is
+   // a FocusChangeListener, we need to have a separate focus listener to avoid
+   // conflicts with the base class implementation which conditionally listens
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/workspace_scroll_tracker.h
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SCROLL_TRACKER_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SCROLL_TRACKER_H_
++
++#include <cmath>
++#include <cstdint>
++
++// Shared between profile windows so the tail of one gesture cannot switch the
++// newly activated workspace again. A quiet interval starts a fresh gesture.
++class WorkspaceScrollTracker {
++ public:
++  int Consume(float delta, int64_t time_ms) {
++    if (!std::isfinite(delta) || delta == 0) {
++      return 0;
++    }
++    if (last_event_ms_ < 0 || time_ms - last_event_ms_ > 180 ||
++        time_ms < last_event_ms_) {
++      accumulated_ = 0;
++      gesture_switched_ = false;
++    }
++    last_event_ms_ = time_ms;
++    if (gesture_switched_ ||
++        (last_switch_ms_ >= 0 && time_ms - last_switch_ms_ < 450)) {
++      return 0;
++    }
++    if (accumulated_ * delta < 0) {
++      accumulated_ = 0;
++    }
++    accumulated_ += delta;
++    if (std::abs(accumulated_) < 48) {
++      return 0;
++    }
++    const int direction = accumulated_ > 0 ? -1 : 1;
++    accumulated_ = 0;
++    last_switch_ms_ = time_ms;
++    gesture_switched_ = true;
++    return direction;
++  }
++
++ private:
++  float accumulated_ = 0;
++  int64_t last_event_ms_ = -1;
++  int64_t last_switch_ms_ = -1;
++  bool gesture_switched_ = false;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SCROLL_TRACKER_H_
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/workspace_switcher_view.cc
+@@ -0,0 +1,388 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/helium/workspace_switcher_view.h"
++
++#include <algorithm>
++#include <cmath>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/i18n/break_iterator.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/lifetime/browser_shutdown.h"
++#include "chrome/browser/prefs/session_startup_pref.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_attributes_entry.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/profiles/profile_window.h"
++#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/views/helium/workspace_scroll_tracker.h"
++#include "ui/base/base_window.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/mojom/dialog_button.mojom.h"
++#include "ui/events/event.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/view_class_properties.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/window/dialog_delegate.h"
++
++namespace {
++
++// Park only windows switched by the workspace control, leaving unrelated
++// windows alone. Closing the visible workspace reveals a parked one, while
++// Quit still follows Chrome's normal shutdown path for every profile.
++class WorkspaceWindows : public BrowserCollectionObserver {
++ public:
++  static WorkspaceWindows& Get() {
++    static base::NoDestructor<WorkspaceWindows> instance;
++    return *instance;
++  }
++
++  WorkspaceWindows() {
++    observation_.Observe(GlobalBrowserCollection::GetInstance());
++  }
++
++  void Switch(BrowserWindowInterface* source, BrowserWindowInterface* target) {
++    if (!target || target == source || source->IsDeleteScheduled() ||
++        target->IsDeleteScheduled() || browser_shutdown::IsTryingToQuit()) {
++      return;
++    }
++    std::erase(parked_, target);
++    auto* old_window = source->GetWindow();
++    auto* new_window = target->GetWindow();
++    if (!old_window->IsFullscreen() && !new_window->IsFullscreen()) {
++      new_window->SetBounds(old_window->GetBounds());
++    }
++    if (std::ranges::find(parked_, source) == parked_.end()) {
++      parked_.push_back(source);
++    }
++    active_ = target;
++    new_window->Show();
++    new_window->Activate();
++    old_window->Hide();
++  }
++
++  void OnBrowserClosed(BrowserWindowInterface* browser) override {
++    std::erase(parked_, browser);
++    if (active_ != browser) {
++      return;
++    }
++    active_ = nullptr;
++    if (browser_shutdown::IsTryingToQuit() || parked_.empty()) {
++      return;
++    }
++    auto* previous = parked_.back().get();
++    parked_.pop_back();
++    active_ = previous;
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(
++                       [](base::WeakPtr<BrowserWindowInterface> window) {
++                         if (window && !browser_shutdown::IsTryingToQuit()) {
++                           window->GetWindow()->Show();
++                           window->GetWindow()->Activate();
++                         }
++                       },
++                       previous->GetWeakPtr()));
++  }
++
++ private:
++  std::vector<raw_ptr<BrowserWindowInterface>> parked_;
++  raw_ptr<BrowserWindowInterface> active_ = nullptr;
++  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
++      observation_{this};
++};
++
++WorkspaceScrollTracker& ScrollTracker() {
++  static WorkspaceScrollTracker tracker;
++  return tracker;
++}
++
++}  // namespace
++
++WorkspaceSwitcherView::WorkspaceSwitcherView(BrowserWindowInterface* browser)
++    : browser_(browser),
++      storage_(&g_browser_process->profile_manager()
++                    ->GetProfileAttributesStorage()) {
++  SetOrientation(views::LayoutOrientation::kHorizontal);
++  SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
++  SetInteriorMargin(gfx::Insets::VH(8, 8));
++  SetDefault(views::kMarginsKey, gfx::Insets::VH(0, 2));
++  GetViewAccessibility().SetName(u"Workspaces. Scroll to switch profiles.");
++  observation_.Observe(storage_);
++  Rebuild();
++}
++
++WorkspaceSwitcherView::~WorkspaceSwitcherView() = default;
++
++void WorkspaceSwitcherView::SetNameChangedCallback(
++    base::RepeatingCallback<void(const std::u16string&)> callback) {
++  name_changed_callback_ = std::move(callback);
++  Rebuild();
++}
++
++void WorkspaceSwitcherView::Rebuild() {
++  workspaces_.clear();
++  RemoveAllChildViews();
++  for (const auto* entry :
++       storage_->GetAllProfilesAttributesSortedForDisplay()) {
++    if (entry->IsOmitted() || entry->IsSigninRequired()) {
++      continue;
++    }
++    const auto path = entry->GetPath();
++    const auto name = entry->GetName();
++    workspaces_.push_back({path, name});
++  }
++  const auto current = std::ranges::find(
++      workspaces_, browser_->GetProfile()->GetPath(), &Workspace::path);
++  const size_t current_index =
++      current == workspaces_.end() ? 0 : current - workspaces_.begin();
++  const size_t count = std::min(visible_capacity_, workspaces_.size());
++  const size_t first =
++      std::min(current_index > count / 2 ? current_index - count / 2 : 0,
++               workspaces_.size() - count);
++  for (size_t i = first; i < first + count; ++i) {
++    const auto& [path, name] = workspaces_[i];
++    const bool selected = path == browser_->GetProfile()->GetPath();
++    std::u16string symbol = u"•";
++    base::i18n::BreakIterator characters(
++        name, base::i18n::BreakIterator::BREAK_CHARACTER);
++    if (characters.Init() && characters.Advance()) {
++      symbol = characters.GetString();
++    }
++    auto* button = AddChildView(std::make_unique<views::LabelButton>(
++        base::BindRepeating(&WorkspaceSwitcherView::SwitchWorkspace,
++                            weak_factory_.GetWeakPtr(), path),
++        symbol));
++    button->SetMinSize(gfx::Size(28, 28));
++    button->SetMaxSize(gfx::Size(32, 32));
++    button->SetTooltipText(name);
++    button->GetViewAccessibility().SetName(name);
++    button->GetViewAccessibility().SetIsSelected(selected);
++    button->SetEnabledTextColors(kColorToolbarText);
++    if (selected) {
++      button->SetBackground(
++          views::CreateRoundedRectBackground(kColorLocationBarBackground, 9));
++      if (name_changed_callback_) {
++        name_changed_callback_.Run(name);
++      }
++    }
++  }
++  auto* add = AddChildView(std::make_unique<views::LabelButton>(
++      base::BindRepeating(&WorkspaceSwitcherView::ShowNameDialog,
++                          weak_factory_.GetWeakPtr(), true),
++      u"+"));
++  add->SetMinSize(gfx::Size(28, 28));
++  add->SetMaxSize(gfx::Size(32, 32));
++  add->SetTooltipText(u"New workspace with a separate profile");
++  add->SetEnabledTextColors(kColorToolbarText);
++  add->SetEnabled(!switching_);
++  InvalidateLayout();
++}
++
++void WorkspaceSwitcherView::SwitchWorkspace(const base::FilePath& path) {
++  if (switching_ || path == browser_->GetProfile()->GetPath()) {
++    return;
++  }
++  auto* entry = storage_->GetProfileAttributesWithPath(path);
++  if (!entry || entry->IsOmitted() || entry->IsSigninRequired()) {
++    return;
++  }
++  switching_ = true;
++  profiles::SwitchToProfile(
++      path, false,
++      base::BindOnce(&WorkspaceSwitcherView::OnWorkspaceReady,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void WorkspaceSwitcherView::OnWorkspaceReady(BrowserWindowInterface* target) {
++  switching_ = false;
++  if (!target || target->IsDeleteScheduled() || browser_->IsDeleteScheduled()) {
++    GetViewAccessibility().AnnounceText(u"Could not open that workspace.");
++    Rebuild();
++    return;
++  }
++  SessionStartupPref::SetStartupPref(
++      browser_->GetProfile(), SessionStartupPref(SessionStartupPref::LAST));
++  SessionStartupPref::SetStartupPref(
++      target->GetProfile(), SessionStartupPref(SessionStartupPref::LAST));
++  WorkspaceWindows::Get().Switch(browser_, target);
++}
++
++bool WorkspaceSwitcherView::HandleWorkspaceScroll(float delta,
++                                                  base::TimeTicks timestamp) {
++  if (switching_ || workspaces_.size() < 2) {
++    return false;
++  }
++  const int direction =
++      ScrollTracker().Consume(delta, timestamp.since_origin().InMilliseconds());
++  if (direction == 0) {
++    return true;
++  }
++  const auto current = std::ranges::find(
++      workspaces_, browser_->GetProfile()->GetPath(), &Workspace::path);
++  if (current == workspaces_.end()) {
++    return false;
++  }
++  const int count = static_cast<int>(workspaces_.size());
++  const int index = static_cast<int>(current - workspaces_.begin());
++  SwitchWorkspace(workspaces_[(index + direction + count) % count].path);
++  return true;
++}
++
++bool WorkspaceSwitcherView::OnMouseWheel(const ui::MouseWheelEvent& event) {
++  return HandleWorkspaceScroll(
++      event.x_offset() != 0 ? event.x_offset() : event.y_offset(),
++      event.time_stamp());
++}
++
++void WorkspaceSwitcherView::OnScrollEvent(ui::ScrollEvent* event) {
++  if (event->type() == ui::EventType::kScroll &&
++      HandleWorkspaceScroll(
++          std::abs(event->x_offset()) > std::abs(event->y_offset())
++              ? event->x_offset()
++              : event->y_offset(),
++          event->time_stamp())) {
++    event->SetHandled();
++  }
++}
++
++void WorkspaceSwitcherView::RenameWorkspace() {
++  ShowNameDialog(false);
++}
++
++void WorkspaceSwitcherView::ShowNameDialog(bool create) {
++  if (switching_ || !GetWidget()) {
++    return;
++  }
++  if (dialog_widget_) {
++    dialog_widget_->Activate();
++    return;
++  }
++  dialog_delegate_ = std::make_unique<views::DialogDelegate>();
++  auto* dialog = dialog_delegate_.get();
++  dialog->SetTitle(create ? u"New workspace" : u"Rename workspace");
++  dialog->SetButtonLabel(ui::mojom::DialogButton::kOk,
++                         create ? u"Create workspace" : u"Save");
++  dialog->SetModalType(ui::mojom::ModalType::kWindow);
++  auto contents = std::make_unique<views::View>();
++  contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kVertical, gfx::Insets(20), 12));
++  auto* input = contents->AddChildView(std::make_unique<views::Textfield>());
++  input->GetViewAccessibility().SetName(u"Workspace name");
++  input->SetPlaceholderText(u"Work, Personal, Research…");
++  input->SetPreferredSize(gfx::Size(300, 36));
++  if (!create) {
++    if (auto* entry = storage_->GetProfileAttributesWithPath(
++            browser_->GetProfile()->GetPath())) {
++      input->SetText(entry->GetName());
++    }
++  }
++  dialog->SetInitiallyFocusedView(input);
++  dialog->SetAcceptCallbackWithClose(base::BindRepeating(
++      [](base::WeakPtr<WorkspaceSwitcherView> view, views::Textfield* input,
++         bool create) {
++        std::u16string name;
++        base::TrimWhitespace(input->GetText(), base::TRIM_ALL, &name);
++        if (!view || name.empty()) {
++          return false;
++        }
++        view->SaveName(create, name);
++        return true;
++      },
++      weak_factory_.GetWeakPtr(), input, create));
++  dialog->SetContentsView(std::move(contents));
++  dialog_widget_ = std::make_unique<views::Widget>();
++  views::Widget::InitParams params(
++      views::Widget::InitParams::CLIENT_OWNS_WIDGET);
++  params.SetParent(GetWidget());
++  params.delegate = dialog;
++  dialog_widget_->Init(std::move(params));
++  dialog_widget_->MakeCloseSynchronous(base::BindOnce(
++      [](base::WeakPtr<WorkspaceSwitcherView> view,
++         views::Widget::ClosedReason) {
++        if (view) {
++          view->dialog_widget_.reset();
++        }
++      },
++      weak_factory_.GetWeakPtr()));
++  dialog_widget_->Show();
++}
++
++void WorkspaceSwitcherView::SaveName(bool create, const std::u16string& name) {
++  if (!create) {
++    if (auto* entry = storage_->GetProfileAttributesWithPath(
++            browser_->GetProfile()->GetPath())) {
++      entry->SetLocalProfileName(name, false);
++    }
++    return;
++  }
++  switching_ = true;
++  Rebuild();
++  ProfileManager::CreateMultiProfileAsync(
++      name, storage_->ChooseAvatarIconIndexForNewProfile(), false,
++      base::BindOnce(&WorkspaceSwitcherView::OnProfileCreated,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void WorkspaceSwitcherView::OnProfileCreated(Profile* profile) {
++  switching_ = false;
++  Rebuild();
++  if (!profile) {
++    GetViewAccessibility().AnnounceText(u"Could not create the workspace.");
++    return;
++  }
++  SwitchWorkspace(profile->GetPath());
++}
++
++void WorkspaceSwitcherView::OnThemeChanged() {
++  views::FlexLayoutView::OnThemeChanged();
++}
++
++void WorkspaceSwitcherView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
++  views::FlexLayoutView::OnBoundsChanged(previous_bounds);
++  const size_t capacity =
++      static_cast<size_t>(std::clamp((width() - 52) / 36, 1, 5));
++  if (capacity != visible_capacity_) {
++    visible_capacity_ = capacity;
++    Rebuild();
++  }
++}
++
++void WorkspaceSwitcherView::OnProfileAdded(const base::FilePath&) {
++  Rebuild();
++}
++
++void WorkspaceSwitcherView::OnProfileWasRemoved(const base::FilePath&,
++                                                const std::u16string&) {
++  Rebuild();
++}
++
++void WorkspaceSwitcherView::OnProfileNameChanged(const base::FilePath&,
++                                                 const std::u16string&) {
++  Rebuild();
++}
++
++void WorkspaceSwitcherView::OnProfileIsOmittedChanged(const base::FilePath&) {
++  Rebuild();
++}
++
++void WorkspaceSwitcherView::OnProfileSigninRequiredChanged(
++    const base::FilePath&) {
++  Rebuild();
++}
++
++BEGIN_METADATA(WorkspaceSwitcherView)
++END_METADATA
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/workspace_switcher_view.h
+@@ -0,0 +1,83 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SWITCHER_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SWITCHER_VIEW_H_
++
++#include <string>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/time/time.h"
++#include "chrome/browser/profiles/profile_attributes_storage.h"
++#include "chrome/browser/profiles/profile_attributes_storage_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/layout/flex_layout_view.h"
++
++class BrowserWindowInterface;
++class Profile;
++namespace views {
++class DialogDelegate;
++class LabelButton;
++class Widget;
++}  // namespace views
++
++class WorkspaceSwitcherView : public views::FlexLayoutView,
++                              public ProfileAttributesStorageObserver {
++  METADATA_HEADER(WorkspaceSwitcherView, views::FlexLayoutView)
++
++ public:
++  explicit WorkspaceSwitcherView(BrowserWindowInterface* browser);
++  ~WorkspaceSwitcherView() override;
++
++  void SetNameChangedCallback(
++      base::RepeatingCallback<void(const std::u16string&)> callback);
++  void RenameWorkspace();
++  bool HandleWorkspaceScroll(float delta, base::TimeTicks timestamp);
++
++  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
++  void OnScrollEvent(ui::ScrollEvent* event) override;
++  void OnThemeChanged() override;
++  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
++
++  void OnProfileAdded(const base::FilePath& path) override;
++  void OnProfileWasRemoved(const base::FilePath& path,
++                           const std::u16string& name) override;
++  void OnProfileNameChanged(const base::FilePath& path,
++                            const std::u16string& old_name) override;
++  void OnProfileIsOmittedChanged(const base::FilePath& path) override;
++  void OnProfileSigninRequiredChanged(const base::FilePath& path) override;
++
++ private:
++  struct Workspace {
++    base::FilePath path;
++    std::u16string name;
++  };
++
++  void Rebuild();
++  void SwitchWorkspace(const base::FilePath& path);
++  void OnWorkspaceReady(BrowserWindowInterface* target);
++  void ShowNameDialog(bool create);
++  void SaveName(bool create, const std::u16string& name);
++  void OnProfileCreated(Profile* profile);
++
++  const raw_ptr<BrowserWindowInterface> browser_;
++  const raw_ptr<ProfileAttributesStorage> storage_;
++  base::ScopedObservation<ProfileAttributesStorage,
++                          ProfileAttributesStorageObserver>
++      observation_{this};
++  std::vector<Workspace> workspaces_;
++  base::RepeatingCallback<void(const std::u16string&)> name_changed_callback_;
++  bool switching_ = false;
++  size_t visible_capacity_ = 5;
++  std::unique_ptr<views::DialogDelegate> dialog_delegate_;
++  std::unique_ptr<views::Widget> dialog_widget_;
++  base::WeakPtrFactory<WorkspaceSwitcherView> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SWITCHER_VIEW_H_
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -344,18 +344,35 @@ class CenteredLocationBarLayout : public
+  public:
+   using GetCenteredBoundsCallback =
+       base::RepeatingCallback<gfx::Rect(gfx::Rect, int)>;
++  using SidebarLayoutCallback =
++      base::RepeatingCallback<std::optional<views::ProposedLayout>(
++          const views::SizeBounds&)>;
+ 
+   CenteredLocationBarLayout(views::View* location_bar,
+                             GetCenteredBoundsCallback callback,
+-                            base::RepeatingCallback<bool()> is_compact)
++                            base::RepeatingCallback<bool()> is_compact,
++                            SidebarLayoutCallback sidebar_layout)
+       : ResponsiveToolbarLayout(std::move(is_compact)),
+         location_bar_(location_bar),
+-        callback_(std::move(callback)) {}
++        callback_(std::move(callback)),
++        sidebar_layout_(std::move(sidebar_layout)) {}
+ 
+   ~CenteredLocationBarLayout() override = default;
+ 
+  protected:
++  views::ProposedLayout CalculateProposedLayout(
++      const views::SizeBounds& bounds) const override {
++    if (auto sidebar = sidebar_layout_.Run(bounds)) {
++      return std::move(*sidebar);
++    }
++    return ResponsiveToolbarLayout::CalculateProposedLayout(bounds);
++  }
++
+   void LayoutImpl() override {
++    if (auto sidebar = sidebar_layout_.Run(views::SizeBounds(host_view()->size()))) {
++      ApplyLayout(*sidebar);
++      return;
++    }
+     views::ProposedLayout layout = GetProposedLayout(host_view()->size());
+     views::ChildLayout* const location_bar_layout =
+         layout.GetLayoutFor(location_bar_);
+@@ -369,6 +386,7 @@ class CenteredLocationBarLayout : public
+  private:
+   const raw_ptr<views::View> location_bar_;
+   GetCenteredBoundsCallback callback_;
++  SidebarLayoutCallback sidebar_layout_;
+ };
+ 
+ }  // namespace
+@@ -1690,6 +1708,9 @@ bool ToolbarView::GetAcceleratorForComma
+ 
+ gfx::Size ToolbarView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
++  if (UsesSidebarLayout()) {
++    return gfx::Size(240, 88);
++  }
+   gfx::Size size;
+   switch (display_mode_) {
+     case DisplayMode::kCustomTab:
+@@ -1718,6 +1739,9 @@ gfx::Size ToolbarView::CalculatePreferre
+ }
+ 
+ gfx::Size ToolbarView::GetMinimumSize() const {
++  if (UsesSidebarLayout()) {
++    return gfx::Size(224, 88);
++  }
+   gfx::Size size;
+   switch (display_mode_) {
+     case DisplayMode::kCustomTab:
+@@ -1761,6 +1785,11 @@ void ToolbarView::Layout(PassKey) {
+     return;
+   }
+ 
++  if (UsesSidebarLayout()) {
++    LayoutSuperclass<AccessiblePaneView>(this);
++    return;
++  }
++
+   if (display_mode_ == DisplayMode::kCustomTab) {
+     custom_tab_bar_->SetBounds(0, 0, width(),
+                                custom_tab_bar_->GetPreferredSize().height());
+@@ -1870,6 +1899,8 @@ void ToolbarView::InitLayout() {
+           base::BindRepeating(&ToolbarView::GetCenteredLocationBarBounds,
+                               base::Unretained(this)),
+           base::BindRepeating(&ToolbarView::IsCompactLayout,
++                              base::Unretained(this)),
++          base::BindRepeating(&ToolbarView::CalculateSidebarLayout,
+                               base::Unretained(this))));
+ 
+   layout_manager_->SetOrientation(views::LayoutOrientation::kHorizontal)
+@@ -2244,6 +2275,48 @@ void ToolbarView::AttachTabStripRegionVi
+   InvalidateLayout();
+ }
+ 
++bool ToolbarView::UsesSidebarLayout() const {
++  const auto* controller =
++      tabs::VerticalTabStripStateController::From(browser_);
++  const auto* layout = HeliumLayoutStateController::From(browser_);
++  return display_mode_ == DisplayMode::kNormal && location_bar_view_ &&
++         IsVerticalLayout() && !IsVerticalTabsRightAligned() && controller &&
++         !controller->IsCollapsed() && layout && !layout->IsZenModeEnabled();
++}
++
++std::optional<views::ProposedLayout> ToolbarView::CalculateSidebarLayout(
++    const views::SizeBounds& bounds) const {
++  if (!UsesSidebarLayout()) {
++    return std::nullopt;
++  }
++  views::ProposedLayout layout;
++  layout.host_size = gfx::Size(bounds.width().value_or(240), 88);
++  for (const auto& child : children()) {
++    layout.child_layouts.push_back(
++        {.child_view = child.get(), .visible = false, .bounds = gfx::Rect()});
++  }
++  const auto place = [&](views::View* child, const gfx::Rect& rect) {
++    if (child) {
++      auto* child_layout = layout.GetLayoutFor(child);
++      if (child_layout) {
++        child_layout->visible = true;
++        child_layout->bounds = rect;
++      }
++    }
++  };
++  // Native window buttons occupy the first 80px on macOS. Keep navigation on
++  // the same compact row, with a full-width address field beneath it.
++  const int end = layout.host_size.width() - 4;
++  place(vertical_tabs_collapse_button_, gfx::Rect(end - 140, 6, 28, 28));
++  place(back_, gfx::Rect(end - 112, 6, 28, 28));
++  place(forward_, gfx::Rect(end - 84, 6, 28, 28));
++  place(reload_, gfx::Rect(end - 56, 6, 28, 28));
++  place(app_menu_button_, gfx::Rect(end - 28, 6, 28, 28));
++  place(location_bar_view_,
++        gfx::Rect(8, 44, std::max(0, layout.host_size.width() - 16), 36));
++  return layout;
++}
++
+ void ToolbarView::UpdateToolbarLayout() {
+   if (!location_bar_) {
+     return;
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -38,6 +38,7 @@
+ #include "ui/views/accessible_pane_view.h"
+ #include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/controls/button/menu_button.h"
++#include "ui/views/layout/proposed_layout.h"
+ #include "ui/views/mouse_watcher.h"
+ #include "ui/views/view.h"
+ #include "url/origin.h"
+@@ -267,6 +268,7 @@ class ToolbarView : public views::Access
+   gfx::Size CalculatePreferredSize(
+       const views::SizeBounds& available_size) const override;
+   gfx::Size GetMinimumSize() const override;
++  bool UsesSidebarLayout() const;
+   void Layout(PassKey) override;
+   void OnThemeChanged() override;
+   bool AcceleratorPressed(const ui::Accelerator& acc) override;
+@@ -347,6 +349,8 @@ class ToolbarView : public views::Access
+ 
+   // Returns whether the Helium layout is Compact.
+   bool IsCompactLayout() const;
++  std::optional<views::ProposedLayout> CalculateSidebarLayout(
++      const views::SizeBounds& bounds) const;
+   bool IsDynamicLayout() const;
+   bool IsVerticalLayout() const;
+   bool IsVerticalTabsRightAligned() const;

@@ -25,3 +25,4 @@ helium/macos/disable-chromium-immersive-fullscreen.patch
 helium/macos/helium-immersive-fullscreen.patch
 helium/macos/fix-history-swiper-lifetime.patch
 helium/ui/zen-inspired-shell.patch
+helium/ui/profile-workspaces-sidebar.patch
