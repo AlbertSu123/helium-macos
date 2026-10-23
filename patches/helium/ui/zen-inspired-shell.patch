@@ -1,0 +1,133 @@
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -139,7 +139,7 @@ void RegisterBrowserUserPrefs(user_prefs
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumCenteredLocationBar, false);
+ 
+-  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
++  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, true);
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
+ 
+--- a/chrome/browser/ui/color/material_chrome_color_mixer.cc
++++ b/chrome/browser/ui/color/material_chrome_color_mixer.cc
+@@ -527,14 +527,15 @@ void AddMaterialChromeColorMixer(ui::Col
+       ui::kColorSysOnSurfaceSubtle};
+ 
+   // Custom themes retain their frame colors because they skip these overrides.
++  // Keep the sidebar and toolbar on one softly tinted surface, framing the
++  // page as a separate rounded panel in both light and dark appearances.
++  mixer[ui::kColorFrameActive] = {
++      dark_mode ? SkColorSetRGB(0x28, 0x26, 0x2E)
++                : SkColorSetRGB(0xEC, 0xE8, 0xE3)};
+   mixer[ui::kColorFrameInactive] = {ui::kColorFrameActive};
+-  if (!dark_mode) {
+-    mixer[ui::kColorFrameActive] = {ui::kColorSysBase};
+-  }
+ 
+   // Toolbar colors.
+-  mixer[kColorToolbar] = {dark_mode ? ui::kColorFrameActive
+-                                    : ui::kColorSysBase};
++  mixer[kColorToolbar] = {ui::kColorFrameActive};
+   mixer[kColorToolbarButtonBackgroundHighlightedDefault] = {
+       ui::kColorSysStateHoverOnSubtle};
+   mixer[kColorToolbarButtonBorder] = {ui::kColorSysOutline};
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -21,7 +21,7 @@ int GetLayoutConstant(LayoutConstant con
+   const bool touch_ui = ui::TouchUiController::Get()->touch_ui();
+   switch (constant) {
+     case LayoutConstant::kHeliumBasePadding:
+-      return 3;
++      return 4;
+     case LayoutConstant::kAppMenuProfileRowAvatarIconSize:
+       return 24;
+     case LayoutConstant::kAppMenuMaximumCharacterLength:
+@@ -77,7 +77,7 @@ int GetLayoutConstant(LayoutConstant con
+     case LayoutConstant::kLocationBarTrailingDecorationInnerPadding:
+       return touch_ui ? 3 : 8;
+     case LayoutConstant::kLocationBarHeight:
+-      return touch_ui ? 36 : 28;
++      return touch_ui ? 36 : 32;
+     // LINT.IfChange(LocationBarIconSize)
+     case LayoutConstant::kLocationBarIconSize:
+       return touch_ui ? 20 : 16;
+@@ -122,7 +122,7 @@ int GetLayoutConstant(LayoutConstant con
+     case LayoutConstant::kTabstripToolbarOverlap:
+       return 0;
+     case LayoutConstant::kToolbarButtonHeight:
+-      return touch_ui ? 48 : 28;
++      return touch_ui ? 48 : 32;
+     case LayoutConstant::kToolbarButtonIconSize:
+       return touch_ui ? kDefaultTouchableIconSize
+                       : kDefaultIconSizeChromeRefresh;
+@@ -149,19 +149,20 @@ int GetLayoutConstant(LayoutConstant con
+     case LayoutConstant::kDownloadIconSize:
+       return 20;
+     case LayoutConstant::kMainBackgroundRegionCornerRadius:
++      return 12;
+     case LayoutConstant::kToolbarCornerRadius:
+     case LayoutConstant::kVerticalTabCornerRadius:
+-      return 8;
++      return 10;
+     case LayoutConstant::kVerticalTabHeight:
+-      return 30;
++      return 36;
+     case LayoutConstant::kVerticalTabPinnedHeight:
+-      return 30;
++      return 36;
+     case LayoutConstant::kVerticalTabMinWidth:
+       return 30;
+     case LayoutConstant::kVerticalTabStripHorizontalPadding:
+-      return 6;
++      return 8;
+     case LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding:
+-      return 6;
++      return 8;
+     case LayoutConstant::kVerticalTabStripCollapsedVerticalPadding:
+       return 6;
+     case LayoutConstant::kVerticalTabStripComboButtonIconSize:
+--- a/chrome/browser/ui/tabs/tab_strip_prefs.cc
++++ b/chrome/browser/ui/tabs/tab_strip_prefs.cc
+@@ -33,7 +33,7 @@ void RegisterProfilePrefs(user_prefs::Pr
+                                 kVerticalTabStripDefaultUncollapsedWidth);
+ 
+   registry->RegisterIntegerPref(prefs::kHeliumLayout,
+-                                std::to_underlying(HeliumLayoutType::kClassic));
++                                std::to_underlying(HeliumLayoutType::kVertical));
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
+--- a/chrome/browser/ui/tabs/vertical_tab_strip_state.h
++++ b/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+@@ -7,7 +7,7 @@
+ 
+ namespace tabs {
+ 
+-inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 200;
++inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 256;
+ 
+ // Per-window state for the vertical tab strip.
+ struct VerticalTabStripState {
+--- a/chrome/browser/ui/views/frame/multi_contents_view.h
++++ b/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -62,7 +62,7 @@ class MultiContentsView
+     int end = 0;
+   };
+ 
+-  static constexpr int kSplitViewContentInset = 3;
++  static constexpr int kSplitViewContentInset = 8;
+ 
+   MultiContentsView(BrowserView* browser_view,
+                     std::unique_ptr<MultiContentsViewDelegate> delegate);
+--- a/chrome/browser/ui/views/helium/frame_corner_radius.cc
++++ b/chrome/browser/ui/views/helium/frame_corner_radius.cc
+@@ -8,7 +8,7 @@
+ #include "chrome/browser/ui/layout_constants.h"
+ 
+ int GetGenericFrameRadius() {
+-  return 8;
++  return 12;
+ }
+ 
+ #if !BUILDFLAG(IS_MAC)

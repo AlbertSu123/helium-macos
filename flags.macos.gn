@@ -5,6 +5,8 @@ enable_mse_mpeg2ts_stream_parser=true
 enable_rust=true
 enable_swiftshader=true
 enable_updater=false
+# Avoid the LLVM 24 precompiled-header module error in component builds.
+enable_precompiled_headers = false
 fatal_linker_warnings=false
 ffmpeg_branding="Chrome"
 is_clang=true
