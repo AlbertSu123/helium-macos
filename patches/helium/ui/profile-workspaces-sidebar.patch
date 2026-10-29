@@ -168,7 +168,7 @@
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
-@@ -141,6 +144,31 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -141,6 +144,32 @@ VerticalTabStripRegionView::VerticalTabS
    const int region_horizontal_padding =
        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
  
@@ -184,6 +184,7 @@
 +                },
 +                base::Unretained(this)),
 +            u"Space"));
++    workspace_name_->SetTextSubpixelRenderingEnabled(false);
 +    workspace_name_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 +    workspace_name_->SetEnabledTextColors(kColorToolbarText);
 +    workspace_name_->SetPreferredSize(gfx::Size(0, 32));
@@ -200,7 +201,7 @@
    bottom_button_container_ = content_area_view_->AddChildView(
        std::make_unique<VerticalTabStripBottomContainer>(
            state_controller_, root_action_item, browser_view->browser(),
-@@ -414,6 +442,18 @@ views::ProposedLayout VerticalTabStripRe
+@@ -414,6 +443,18 @@ views::ProposedLayout VerticalTabStripRe
  
    available.Inset(interior_margin_);
  
@@ -219,7 +220,7 @@
    // Just so that there's never a zero-size tabstrip.
    available.set_height(std::max(1, available.height()));
  
-@@ -553,6 +593,34 @@ void VerticalTabStripRegionView::OnMouse
+@@ -553,6 +594,34 @@ void VerticalTabStripRegionView::OnMouse
    HandleMouseExited();
  }
  
@@ -254,7 +255,7 @@
  void VerticalTabStripRegionView::SetOrganizerPanelView(
      std::unique_ptr<views::View> panel_view) {
    CHECK(!organizer_panel_view_);
-@@ -910,6 +978,9 @@ void VerticalTabStripRegionView::OnColla
+@@ -910,6 +979,9 @@ void VerticalTabStripRegionView::OnColla
    // Apply padding immediately at the start of the animation by including
    // the collapsing state.
    bool collapsed = state != tabs::VerticalTabStripCollapseState::kExpanded;
@@ -264,7 +265,7 @@
  
    UpdateResizeAreaVisibility();
  
-@@ -958,6 +1029,12 @@ gfx::Rect VerticalTabStripRegionView::Ge
+@@ -958,6 +1030,12 @@ gfx::Rect VerticalTabStripRegionView::Ge
        GetLayoutConstant(
            LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding) -
        tab_strip_draggable_bounds.y());
@@ -378,7 +379,7 @@
 +#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_WORKSPACE_SCROLL_TRACKER_H_
 --- /dev/null
 +++ b/chrome/browser/ui/views/helium/workspace_switcher_view.cc
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,391 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -501,6 +502,7 @@
 +  SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
 +  SetInteriorMargin(gfx::Insets::VH(8, 8));
 +  SetDefault(views::kMarginsKey, gfx::Insets::VH(0, 2));
++  GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
 +  GetViewAccessibility().SetName(u"Workspaces. Scroll to switch profiles.");
 +  observation_.Observe(storage_);
 +  Rebuild();
@@ -547,6 +549,7 @@
 +        base::BindRepeating(&WorkspaceSwitcherView::SwitchWorkspace,
 +                            weak_factory_.GetWeakPtr(), path),
 +        symbol));
++    button->SetTextSubpixelRenderingEnabled(false);
 +    button->SetMinSize(gfx::Size(28, 28));
 +    button->SetMaxSize(gfx::Size(32, 32));
 +    button->SetTooltipText(name);
@@ -565,6 +568,7 @@
 +      base::BindRepeating(&WorkspaceSwitcherView::ShowNameDialog,
 +                          weak_factory_.GetWeakPtr(), true),
 +      u"+"));
++  add->SetTextSubpixelRenderingEnabled(false);
 +  add->SetMinSize(gfx::Size(28, 28));
 +  add->SetMaxSize(gfx::Size(32, 32));
 +  add->SetTooltipText(u"New workspace with a separate profile");
